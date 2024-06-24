@@ -1,3 +1,8 @@
+// todo :
+// seperate heic convert to jpg
+// display only supported files not heic
+// maybe move converted heic to seperate folder and discard it in the future
+
 package main
 
 import (
@@ -5,18 +10,29 @@ import (
 	"html/template"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/disintegration/imaging"
 )
 
-const baseDir = "/home/spot/spot-or/myPhotos"                 // Replace with your actual photos directory
-const thumbnailDir = "/home/spot/spot-or/myPhotos/thumbnails" // Replace with where you want to store thumbnails
+const baseDir = "/home/spot/spot-or/myPhotosTest"                 // Replace with your actual photos directory
+const thumbnailDir = "/home/spot/spot-or/myPhotosTest/thumbnails" // Replace with where you want to store thumbnails
 
 func isImage(filename string) bool {
 	ext := strings.ToLower(filepath.Ext(filename))
-	return ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".gif"
+	return ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".gif" || ext == ".heic"
+}
+
+func convertHeicToJpeg(src string) (string, error) {
+	dest := strings.TrimSuffix(src, filepath.Ext(src)) + ".jpg"
+	cmd := exec.Command("magick", "convert", src, dest)
+	err := cmd.Run()
+	if err != nil {
+		return "", err
+	}
+	return dest, nil
 }
 
 func generateThumbnail(src, dest string) error {
@@ -24,6 +40,15 @@ func generateThumbnail(src, dest string) error {
 	err := os.MkdirAll(filepath.Dir(dest), 0755)
 	if err != nil {
 		return err
+	}
+
+	// If the source file is a HEIC image, convert it to JPEG first
+	if strings.ToLower(filepath.Ext(src)) == ".heic" {
+		jpegSrc, err := convertHeicToJpeg(src)
+		if err != nil {
+			return err
+		}
+		src = jpegSrc
 	}
 
 	img, err := imaging.Open(src)

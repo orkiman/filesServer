@@ -1,8 +1,3 @@
-// todo :
-// seperate heic convert to jpg
-// display only supported files not heic
-// maybe move converted heic to seperate folder and discard it in the future
-
 package main
 
 import (
@@ -13,15 +8,21 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 
 	"github.com/disintegration/imaging"
 )
 
-const baseDir = "/home/spot/spot-or/myPhotosTest"                 // Replace with your actual photos directory
-const thumbnailDir = "/home/spot/spot-or/myPhotosTest/thumbnails" // Replace with where you want to store thumbnails
+const baseDir = "/home/spot/spot-or/myPhotosTest" // Replace with your actual photos directory
+const photosDir = baseDir + "/photos"
+const thumbnailDir = baseDir + "/thumbnails" // Replace with where you want to store thumbnails
+const heicDir = baseDir + "/heic"
+
+var handleFileServerCounter uint64 = 0
 
 func isImage(filename string) bool {
 	ext := strings.ToLower(filepath.Ext(filename))
+	fmt.Println("filename : " + filename + "  ext : " + ext)
 	return ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".gif" || ext == ".heic"
 }
 
@@ -32,23 +33,16 @@ func convertHeicToJpeg(src string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// move heic to heic folder
+	newHeicPath := filepath.Join(heicDir, filepath.Base(src))
+	os.Rename(src, newHeicPath)
 	return dest, nil
 }
 
 func generateThumbnail(src, dest string) error {
-	// Ensure the destination directory exists
 	err := os.MkdirAll(filepath.Dir(dest), 0755)
 	if err != nil {
 		return err
-	}
-
-	// If the source file is a HEIC image, convert it to JPEG first
-	if strings.ToLower(filepath.Ext(src)) == ".heic" {
-		jpegSrc, err := convertHeicToJpeg(src)
-		if err != nil {
-			return err
-		}
-		src = jpegSrc
 	}
 
 	img, err := imaging.Open(src)
@@ -60,9 +54,30 @@ func generateThumbnail(src, dest string) error {
 	return imaging.Save(thumbnail, dest)
 }
 
-func handleFileServer(w http.ResponseWriter, r *http.Request) {
-	path := filepath.Join(baseDir, r.URL.Path)
+func convertAllHeicFiles(path string) error {
+	files, err := os.ReadDir(path)
+	if err != nil {
+		return err
+	}
 
+	for _, file := range files {
+		filePath := filepath.Join(path, file.Name())
+		if strings.ToLower(filepath.Ext(filePath)) == ".heic" {
+			_, err := convertHeicToJpeg(filePath)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func handleFileServer(w http.ResponseWriter, r *http.Request) {
+	atomic.AddUint64(&handleFileServerCounter, 1)
+	fmt.Printf("handleFileServer called %d times for URL: %s\n", atomic.LoadUint64(&handleFileServerCounter), r.URL.Path)
+
+	path := filepath.Join(photosDir, r.URL.Path)
 	info, err := os.Stat(path)
 	if os.IsNotExist(err) {
 		http.NotFound(w, r)
@@ -70,6 +85,14 @@ func handleFileServer(w http.ResponseWriter, r *http.Request) {
 	} else if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	if info.IsDir() {
+		err := convertAllHeicFiles(path)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	if !info.IsDir() {
@@ -95,20 +118,14 @@ func handleFileServer(w http.ResponseWriter, r *http.Request) {
 		filePath := filepath.Join(path, file.Name())
 		isImg := isImage(file.Name())
 		thumbnailPath := ""
-
 		if isImg {
-			// Construct the relative thumbnail path
 			thumbnailPath = filepath.Join("/thumbnails", r.URL.Path, file.Name())
-			// Construct the absolute path where the thumbnail should be saved
 			thumbnailFullPath := filepath.Join(thumbnailDir, r.URL.Path, file.Name())
 
-			// Check if the thumbnail already exists
 			if _, err := os.Stat(thumbnailFullPath); os.IsNotExist(err) {
-				// Generate the thumbnail if it doesn't exist
 				err := generateThumbnail(filePath, thumbnailFullPath)
 				if err != nil {
 					fmt.Printf("Error generating thumbnail: %v\n", err)
-					// Clear the thumbnail path if generation fails
 					thumbnailPath = ""
 				}
 			}
@@ -136,8 +153,8 @@ func handleFileServer(w http.ResponseWriter, r *http.Request) {
                     text-align: center;
                 }
                 .thumbnail {
-                    width: 200px; /* Set the width to 200px */
-                    height: auto; /* Maintain the aspect ratio */
+                    width: 200px;
+                    height: auto;
                 }
             </style>
         </head>
@@ -173,11 +190,15 @@ func handleFileServer(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleThumbnails(w http.ResponseWriter, r *http.Request) {
+	fmt.Printf("handle thumbnail for URL: %s\n", r.URL.Path)
 	thumbnailPath := filepath.Join(thumbnailDir, strings.TrimPrefix(r.URL.Path, "/thumbnails/"))
 	http.ServeFile(w, r, thumbnailPath)
 }
 
 func main() {
+	os.MkdirAll(heicDir, 0755)
+	os.MkdirAll(thumbnailDir, 0755)
+	os.MkdirAll(photosDir, 0755)
 	http.HandleFunc("/", handleFileServer)
 	http.HandleFunc("/thumbnails/", handleThumbnails)
 	fmt.Println("Server starting on port 8080...")

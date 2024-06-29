@@ -3,14 +3,17 @@ package main
 import (
 	"fmt"
 	"html/template"
+	"image"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
-	"sync/atomic"
 
 	"github.com/disintegration/imaging"
+	"github.com/dsoprea/go-exif/v3"
+	exifcommon "github.com/dsoprea/go-exif/v3/common"
 )
 
 const baseDir = "/home/spot/spot-or/myPhotosTest" // Replace with your actual photos directory
@@ -18,11 +21,9 @@ const photosDir = baseDir + "/photos"
 const thumbnailDir = baseDir + "/thumbnails" // Replace with where you want to store thumbnails
 const heicDir = baseDir + "/heic"
 
-var handleFileServerCounter uint64 = 0
-
 func isImage(filename string) bool {
 	ext := strings.ToLower(filepath.Ext(filename))
-	fmt.Println("filename : " + filename + "  ext : " + ext)
+	// fmt.Println("filename : " + filename + "  ext : " + ext)
 	return ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".gif" || ext == ".heic"
 }
 
@@ -39,6 +40,27 @@ func convertHeicToJpeg(src string) (string, error) {
 	return dest, nil
 }
 
+func adjustOrientation(img image.Image, orientation int, imgName string) image.Image {
+	switch orientation {
+	case 2:
+		return imaging.FlipH(img)
+	case 3:
+		return imaging.Rotate180(img)
+	case 4:
+		return imaging.FlipV(img)
+	case 5:
+		return imaging.Transpose(img)
+	case 6:
+		return imaging.Rotate270(img)
+	case 7:
+		return imaging.Transverse(img)
+	case 8:
+		return imaging.Rotate90(img)
+	default:
+		return img
+	}
+}
+
 func generateThumbnail(src, dest string) error {
 	err := os.MkdirAll(filepath.Dir(dest), 0755)
 	if err != nil {
@@ -49,6 +71,22 @@ func generateThumbnail(src, dest string) error {
 	if err != nil {
 		return err
 	}
+
+	// Open the image file to read EXIF data
+	f, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	orientation, err := getOrientation(src)
+	if err != nil {
+		// Handle error from getOrientation
+		fmt.Println("getOriententation return error : ", err)
+		return err
+	}
+
+	img = adjustOrientation(img, int(orientation), filepath.Base(src))
 
 	thumbnail := imaging.Resize(img, 200, 0, imaging.Lanczos)
 	return imaging.Save(thumbnail, dest)
@@ -74,8 +112,6 @@ func convertAllHeicFiles(path string) error {
 }
 
 func handleFileServer(w http.ResponseWriter, r *http.Request) {
-	atomic.AddUint64(&handleFileServerCounter, 1)
-	fmt.Printf("handleFileServer called %d times for URL: %s\n", atomic.LoadUint64(&handleFileServerCounter), r.URL.Path)
 
 	path := filepath.Join(photosDir, r.URL.Path)
 	info, err := os.Stat(path)
@@ -190,12 +226,13 @@ func handleFileServer(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleThumbnails(w http.ResponseWriter, r *http.Request) {
-	fmt.Printf("handle thumbnail for URL: %s\n", r.URL.Path)
+	// fmt.Printf("handle thumbnail for URL: %s\n", r.URL.Path)
 	thumbnailPath := filepath.Join(thumbnailDir, strings.TrimPrefix(r.URL.Path, "/thumbnails/"))
 	http.ServeFile(w, r, thumbnailPath)
 }
 
 func main() {
+	// testOrientation()
 	os.MkdirAll(heicDir, 0755)
 	os.MkdirAll(thumbnailDir, 0755)
 	os.MkdirAll(photosDir, 0755)
@@ -203,4 +240,54 @@ func main() {
 	http.HandleFunc("/thumbnails/", handleThumbnails)
 	fmt.Println("Server starting on port 8080...")
 	http.ListenAndServe(":8080", nil)
+}
+
+func getOrientation(imagePath string) (int, error) {
+	// Read the image file into a byte slice
+	imageData, err := os.ReadFile(imagePath)
+	if err != nil {
+		fmt.Println("Error reading image file:", err)
+		return -1, err
+	}
+
+	// Extract EXIF data
+	rawExif, err := exif.SearchAndExtractExif(imageData)
+	if err != nil {
+		fmt.Println("Error extracting EXIF data:", err)
+		return -1, err
+	}
+
+	// Parse the EXIF data
+	im := exifcommon.NewIfdMapping()
+	err = exifcommon.LoadStandardIfds(im)
+	if err != nil {
+		fmt.Println("Error loading standard IFDs:", err)
+		return -1, err
+	}
+
+	ti := exif.NewTagIndex()
+
+	_, index, err := exif.Collect(im, ti, rawExif)
+	if err != nil {
+		fmt.Println("Error collecting EXIF data:", err)
+		return -1, err
+	}
+
+	// Try to find Orientation tag
+	orientationTags, err := index.RootIfd.FindTagWithName("Orientation")
+	if err == nil && len(orientationTags) > 0 {
+		orientationTag := orientationTags[0]
+		value, err := orientationTag.FormatFirst()
+		if err == nil {
+			// fmt.Printf("Orientation: %v\n", value)
+			orientationInt, err := strconv.Atoi(value)
+			if err != nil {
+				fmt.Println("Error converting orientation to integer:", err)
+				return -1, err
+			}
+			return orientationInt, nil
+		}
+	}
+
+	return -1, fmt.Errorf("Orientation tag not found")
 }

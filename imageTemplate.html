@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Image Viewer</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            width: 100%;
+            display: flex;
+            flex-direction: column; /* Ensure content is stacked vertically */
+            align-items: center;
+            justify-content: center;
+            background-color: #f0f0f0; /* Optional: set a background color */
+        }
+        .header {
+            width: 100%;
+            padding: 10px;
+            text-align: center;
+            background-color: #333;
+            color: white;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+            z-index: 2; /* Ensure header is above other content */
+        }
+        .header a {
+            color: white;
+            text-decoration: none;
+            font-weight: bold;
+        }
+        .image-container {
+            position: relative;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            width: 100%;
+            height: 100%;
+            background-color: pink;
+            overflow: hidden; /* Ensure content does not overflow */
+        }
+        .image-container img {
+            max-width: 90%;
+            max-height: 90%;
+            width: auto;
+            height: auto;
+            user-select: none; /* Disable selection on image */
+        }
+        .nav-arrow {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 50px;
+            height: 50px;
+            background-color: rgba(0, 0, 0, 0.5);
+            color: white;
+            font-size: 24px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
+            z-index: 1; /* Ensure arrows are above image */
+        }
+        .nav-arrow.prev {
+            left: 10px;
+        }
+        .nav-arrow.next {
+            right: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <a href="/">Home</a> <!-- Adjust the href attribute as per your root directory URL -->
+    </div>
+    <div class="image-container">
+        <div class="nav-arrow prev" onclick="navigate('{{ .PrevPath }}')">&lt;</div>
+        <img id="currentImage" src="{{ .ImagePath }}" alt="Full Size Image">
+        <div class="nav-arrow next" onclick="navigate('{{ .NextPath }}')">&gt;</div>
+    </div>
+
+    <script>
+        let startX = 0;
+        let startY = 0;
+        const minSwipeDistance = 50; // Minimum swipe distance in pixels
+
+        function navigate(path) {
+            if (path) {
+                window.location.href = path;
+            }
+        }
+
+        function touchStart(event) {
+            startX = event.touches[0].clientX;
+            startY = event.touches[0].clientY;
+        }
+
+        function touchEnd(event) {
+            let endX = event.changedTouches[0].clientX;
+            let endY = event.changedTouches[0].clientY;
+            let deltaX = endX - startX;
+            let deltaY = endY - startY;
+
+            if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > minSwipeDistance) {
+                if (deltaX > 0) {
+                    // Swipe right (next)
+                    navigate('{{ .NextPath }}');
+                } else {
+                    // Swipe left (previous)
+                    navigate('{{ .PrevPath }}');
+                }
+            }
+        }
+
+        document.getElementById('currentImage').addEventListener('touchstart', touchStart);
+        document.getElementById('currentImage').addEventListener('touchend', touchEnd);
+    </script>
+</body>
+</html>

@@ -23,7 +23,6 @@ const heicDir = baseDir + "/heic"
 
 func isImage(filename string) bool {
 	ext := strings.ToLower(filepath.Ext(filename))
-	// fmt.Println("filename : " + filename + "  ext : " + ext)
 	return ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".gif" || ext == ".heic"
 }
 
@@ -34,7 +33,6 @@ func convertHeicToJpeg(src string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// move heic to heic folder
 	newHeicPath := filepath.Join(heicDir, filepath.Base(src))
 	os.Rename(src, newHeicPath)
 	return dest, nil
@@ -72,7 +70,6 @@ func generateThumbnail(src, dest string) error {
 		return err
 	}
 
-	// Open the image file to read EXIF data
 	f, err := os.Open(src)
 	if err != nil {
 		return err
@@ -81,8 +78,7 @@ func generateThumbnail(src, dest string) error {
 
 	orientation, err := getOrientation(src)
 	if err != nil {
-		// Handle error from getOrientation
-		fmt.Println("getOriententation return error : ", err)
+		fmt.Println("getOrientation return error:", err)
 		return err
 	}
 
@@ -110,9 +106,7 @@ func convertAllHeicFiles(path string) error {
 
 	return nil
 }
-
 func handleFileServer(w http.ResponseWriter, r *http.Request) {
-
 	path := filepath.Join(photosDir, r.URL.Path)
 	info, err := os.Stat(path)
 	if os.IsNotExist(err) {
@@ -124,140 +118,172 @@ func handleFileServer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if info.IsDir() {
+		// Handle directory listing
 		err := convertAllHeicFiles(path)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-	}
 
-	if !info.IsDir() {
-		http.ServeFile(w, r, path)
-		return
-	}
-
-	files, err := os.ReadDir(path)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	var fileInfos []struct {
-		Name          string
-		IsDir         bool
-		Path          string
-		IsImage       bool
-		ThumbnailPath string
-	}
-
-	for _, file := range files {
-		filePath := filepath.Join(path, file.Name())
-		isImg := isImage(file.Name())
-		thumbnailPath := ""
-		if isImg {
-			thumbnailPath = filepath.Join("/thumbnails", r.URL.Path, file.Name())
-			thumbnailFullPath := filepath.Join(thumbnailDir, r.URL.Path, file.Name())
-
-			if _, err := os.Stat(thumbnailFullPath); os.IsNotExist(err) {
-				err := generateThumbnail(filePath, thumbnailFullPath)
-				if err != nil {
-					fmt.Printf("Error generating thumbnail: %v\n", err)
-					thumbnailPath = ""
-				}
-			}
+		files, err := os.ReadDir(path)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
 
-		fileInfos = append(fileInfos, struct {
+		var fileInfos []struct {
 			Name          string
 			IsDir         bool
 			Path          string
 			IsImage       bool
 			ThumbnailPath string
-		}{file.Name(), file.IsDir(), filepath.Join(r.URL.Path, file.Name()), isImg, thumbnailPath})
+		}
+
+		for _, file := range files {
+			filePath := filepath.Join(path, file.Name())
+			isImg := isImage(file.Name())
+			thumbnailPath := ""
+			if isImg {
+				thumbnailPath = filepath.Join("/thumbnails", r.URL.Path, file.Name())
+				thumbnailFullPath := filepath.Join(thumbnailDir, r.URL.Path, file.Name())
+
+				if _, err := os.Stat(thumbnailFullPath); os.IsNotExist(err) {
+					err := generateThumbnail(filePath, thumbnailFullPath)
+					if err != nil {
+						fmt.Printf("Error generating thumbnail: %v\n", err)
+						thumbnailPath = ""
+					}
+				}
+			}
+
+			fileInfos = append(fileInfos, struct {
+				Name          string
+				IsDir         bool
+				Path          string
+				IsImage       bool
+				ThumbnailPath string
+			}{file.Name(), file.IsDir(), filepath.Join(r.URL.Path, file.Name()), isImg, thumbnailPath})
+		}
+
+		data := struct {
+			Files []struct {
+				Name          string
+				IsDir         bool
+				Path          string
+				IsImage       bool
+				ThumbnailPath string
+			}
+		}{
+			Files: fileInfos,
+		}
+
+		tmplFile := "galleryTemplate.html"
+		t, err := template.ParseFiles(tmplFile)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		err = t.Execute(w, data)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		return
 	}
 
-	tmpl := `
-    <html>
-        <head>
-            <style>
-                .grid {
-                    display: grid;
-                    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-                    gap: 10px;
-                }
-                .grid-item {
-                    text-align: center;
-                }
-                .thumbnail {
-                    width: 200px;
-                    height: auto;
-                }
-            </style>
-        </head>
-        <body>
-            <h1>File Browser</h1>
-            <div class="grid">
-                {{range .}}
-                    <div class="grid-item">
-                        {{if .IsDir}}
-                            <a href="{{.Path}}">📁 {{.Name}}/</a>
-                        {{else if .IsImage}}
-                            <a href="{{.Path}}">
-                                <img class="thumbnail" src="{{.ThumbnailPath}}" alt="{{.Name}}">
-                                <br>{{.Name}}
-                            </a>
-                        {{else}}
-                            <a href="{{.Path}}">📄 {{.Name}}</a>
-                        {{end}}
-                    </div>
-                {{end}}
-            </div>
-        </body>
-    </html>
-    `
-
-	t, err := template.New("filelist").Parse(tmpl)
+	// Handle full-size image view using imageTemplate.html
+	files, err := os.ReadDir(filepath.Dir(path))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	t.Execute(w, fileInfos)
+	var currentIndex, totalImages int
+	var prevPath, nextPath string
+
+	for i, file := range files {
+		if isImage(file.Name()) {
+			if filepath.Base(path) == file.Name() {
+				currentIndex = i
+			}
+			totalImages++
+		}
+	}
+
+	if totalImages > 1 {
+		prevIndex := (currentIndex - 1 + totalImages) % totalImages
+		nextIndex := (currentIndex + 1) % totalImages
+		prevPath = filepath.Join(filepath.Dir(r.URL.Path), files[prevIndex].Name())
+		nextPath = filepath.Join(filepath.Dir(r.URL.Path), files[nextIndex].Name())
+	}
+
+	// Debug logs
+	fmt.Printf("Current image: %s\n", r.URL.Path)
+	fmt.Printf("Previous image path: %s\n", prevPath)
+	fmt.Printf("Next image path: %s\n", nextPath)
+
+	data := struct {
+		ImagePath string
+		PrevPath  string
+		NextPath  string
+	}{
+		// ImagePath: "/photos/" + r.URL.Path, // Use relative URL path
+
+		// ImagePath: path, // Use relative URL path
+		// ImagePath: "photos/1.jpg", //filepath.Join("photos", r.URL.Path),
+		ImagePath: filepath.Join("photos", r.URL.Path),
+		PrevPath:  prevPath,
+		NextPath:  nextPath,
+	}
+
+	fmt.Println("r.URL.Path", r.URL.Path)
+	fmt.Println("ImagePath", data.ImagePath)
+	fmt.Println("path: ", path)
+
+	tmplFile := "imageTemplate.html"
+	t, err := template.ParseFiles(tmplFile)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	err = t.Execute(w, data)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 }
 
 func handleThumbnails(w http.ResponseWriter, r *http.Request) {
-	// fmt.Printf("handle thumbnail for URL: %s\n", r.URL.Path)
 	thumbnailPath := filepath.Join(thumbnailDir, strings.TrimPrefix(r.URL.Path, "/thumbnails/"))
 	http.ServeFile(w, r, thumbnailPath)
 }
 
 func main() {
-	// testOrientation()
 	os.MkdirAll(heicDir, 0755)
 	os.MkdirAll(thumbnailDir, 0755)
 	os.MkdirAll(photosDir, 0755)
 	http.HandleFunc("/", handleFileServer)
+	http.Handle("/photos/", http.StripPrefix("/photos/", http.FileServer(http.Dir(photosDir))))
 	http.HandleFunc("/thumbnails/", handleThumbnails)
 	fmt.Println("Server starting on port 8080...")
 	http.ListenAndServe(":8080", nil)
 }
 
 func getOrientation(imagePath string) (int, error) {
-	// Read the image file into a byte slice
 	imageData, err := os.ReadFile(imagePath)
 	if err != nil {
 		fmt.Println("Error reading image file:", err)
 		return -1, err
 	}
 
-	// Extract EXIF data
 	rawExif, err := exif.SearchAndExtractExif(imageData)
 	if err != nil {
 		fmt.Println("Error extracting EXIF data:", err)
 		return -1, err
 	}
 
-	// Parse the EXIF data
 	im := exifcommon.NewIfdMapping()
 	err = exifcommon.LoadStandardIfds(im)
 	if err != nil {
@@ -273,13 +299,11 @@ func getOrientation(imagePath string) (int, error) {
 		return -1, err
 	}
 
-	// Try to find Orientation tag
 	orientationTags, err := index.RootIfd.FindTagWithName("Orientation")
 	if err == nil && len(orientationTags) > 0 {
 		orientationTag := orientationTags[0]
 		value, err := orientationTag.FormatFirst()
 		if err == nil {
-			// fmt.Printf("Orientation: %v\n", value)
 			orientationInt, err := strconv.Atoi(value)
 			if err != nil {
 				fmt.Println("Error converting orientation to integer:", err)
